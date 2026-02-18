@@ -16,6 +16,24 @@ async function openaiGet(path: string, apiKey: string, params?: Record<string, s
   return res.json();
 }
 
+async function openaiGetAllPages(
+  path: string,
+  apiKey: string,
+  params: Record<string, string>
+): Promise<unknown[]> {
+  const results: unknown[] = [];
+  let page: string | undefined;
+  for (let i = 0; i < 20; i++) {
+    const p = page ? { ...params, page } : params;
+    const json = await openaiGet(path, apiKey, p);
+    if (Array.isArray(json?.data)) results.push(...json.data);
+    if (!json?.has_more) break;
+    page = json.next_page;
+    if (!page) break;
+  }
+  return results;
+}
+
 export async function validateKey(apiKey: string): Promise<boolean> {
   try {
     if (apiKey.startsWith("sk-admin-")) {
@@ -40,13 +58,13 @@ export async function fetchUsage(apiKey: string, days: number): Promise<UsageDat
   const startTime = Math.floor(start.getTime() / 1000);
 
   try {
-    const [completionsData, costsData] = await Promise.all([
-      openaiGet("/v1/organization/usage/completions", apiKey, {
+    const [completionsBuckets, costsBuckets] = await Promise.all([
+      openaiGetAllPages("/v1/organization/usage/completions", apiKey, {
         start_time: startTime.toString(),
         bucket_width: "1d",
         group_by: "model",
       }).catch(() => null),
-      openaiGet("/v1/organization/costs", apiKey, {
+      openaiGetAllPages("/v1/organization/costs", apiKey, {
         start_time: startTime.toString(),
         bucket_width: "1d",
       }).catch(() => null),
@@ -56,10 +74,10 @@ export async function fetchUsage(apiKey: string, days: number): Promise<UsageDat
     const modelMap = new Map<string, ModelUsage>();
     let totalCost = 0;
 
-    if (completionsData?.data) {
+    if (completionsBuckets) {
       const dayMap = new Map<string, DailyUsage>();
 
-      for (const bucket of completionsData.data) {
+      for (const bucket of completionsBuckets as Array<{ start_time: number; results?: Array<{ input_tokens?: number; output_tokens?: number; num_model_requests?: number; model?: string }> }>) {
         const date = new Date(bucket.start_time * 1000).toISOString().split("T")[0];
 
         if (!dayMap.has(date)) {
@@ -90,8 +108,8 @@ export async function fetchUsage(apiKey: string, days: number): Promise<UsageDat
       dailyUsage.push(...Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date)));
     }
 
-    if (costsData?.data) {
-      for (const bucket of costsData.data) {
+    if (costsBuckets) {
+      for (const bucket of costsBuckets as Array<{ results?: Array<{ amount?: { value?: number } }> }>) {
         for (const result of bucket.results || []) {
           totalCost += (result.amount?.value || 0) / 100;
         }
@@ -106,7 +124,7 @@ export async function fetchUsage(apiKey: string, days: number): Promise<UsageDat
       modelBreakdown: Array.from(modelMap.values()).sort(
         (a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens)
       ),
-      note: !completionsData && !costsData
+      note: !completionsBuckets && !costsBuckets
         ? "Admin API key required for usage data. Go to platform.openai.com > Organization > Admin Keys."
         : undefined,
     };
