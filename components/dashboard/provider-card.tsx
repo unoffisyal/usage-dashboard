@@ -10,6 +10,18 @@ import { RateLimitGauge } from "./rate-limit-gauge";
 
 type AnyUsageData = UsageData | GeminiUsageData;
 
+function fillDailyGaps(data: UsageData["dailyUsage"], days: number): UsageData["dailyUsage"] {
+  const map = new Map(data.map((d) => [d.date, d]));
+  const result: UsageData["dailyUsage"] = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 86400000);
+    const date = d.toISOString().split("T")[0];
+    result.push(map.get(date) ?? { date, inputTokens: 0, outputTokens: 0, requests: 0 });
+  }
+  return result;
+}
+
 export function ProviderCard({
   provider,
   days,
@@ -77,7 +89,7 @@ export function ProviderCard({
         ) : error ? (
           <ErrorState message={error} />
         ) : data ? (
-          <ProviderContent provider={provider} data={data} />
+          <ProviderContent provider={provider} data={data} days={days} />
         ) : null}
       </div>
     </div>
@@ -87,9 +99,11 @@ export function ProviderCard({
 function ProviderContent({
   provider,
   data,
+  days,
 }: {
   provider: Provider;
   data: AnyUsageData;
+  days: number;
 }) {
   if (provider === "gemini") {
     const gemini = data as GeminiUsageData;
@@ -98,6 +112,7 @@ function ProviderContent({
 
   const usage = data as UsageData;
   const meta = PROVIDER_META[provider];
+  const filledDaily = fillDailyGaps(usage.dailyUsage, days);
 
   return (
     <>
@@ -119,7 +134,7 @@ function ProviderContent({
       {usage.dailyUsage.length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-text-secondary mb-2">Daily Token Usage</h4>
-          <UsageChart data={usage.dailyUsage} color={meta.color} />
+          <UsageChart data={filledDaily} color={meta.color} />
         </div>
       )}
 
