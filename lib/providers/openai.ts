@@ -18,7 +18,16 @@ async function openaiGet(path: string, apiKey: string, params?: Record<string, s
 
 export async function validateKey(apiKey: string): Promise<boolean> {
   try {
-    await openaiGet("/v1/models", apiKey);
+    if (apiKey.startsWith("sk-admin-")) {
+      // Admin keys can't access /v1/models; validate via organization endpoint
+      const now = Math.floor(Date.now() / 1000);
+      await openaiGet("/v1/organization/costs", apiKey, {
+        start_time: (now - 86400).toString(),
+        bucket_width: "1d",
+      });
+    } else {
+      await openaiGet("/v1/models", apiKey);
+    }
     return true;
   } catch {
     return false;
