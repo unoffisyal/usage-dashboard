@@ -10,6 +10,9 @@ import { RateLimitGauge } from "./rate-limit-gauge";
 
 type AnyUsageData = UsageData | GeminiUsageData;
 
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const dataCache = new Map<string, { data: AnyUsageData; ts: number }>();
+
 function fillDailyGaps(data: UsageData["dailyUsage"], days: number): UsageData["dailyUsage"] {
   const map = new Map(data.map((d) => [d.date, d]));
   const result: UsageData["dailyUsage"] = [];
@@ -32,8 +35,17 @@ export function ProviderCard({
   const [data, setData] = useState<AnyUsageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (force = false) => {
+    const key = `${provider}-${days}`;
+    const cached = dataCache.get(key);
+    if (!force && cached && Date.now() - cached.ts < CACHE_TTL) {
+      setData(cached.data);
+      setCachedAt(cached.ts);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -41,7 +53,10 @@ export function ProviderCard({
       const res = await fetch(`/api/usage/${provider}${params}`);
       if (!res.ok) throw new Error(`Failed to fetch`);
       const json = await res.json();
+      const ts = Date.now();
+      dataCache.set(key, { data: json, ts });
       setData(json);
+      setCachedAt(ts);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -51,7 +66,7 @@ export function ProviderCard({
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 300000);
+    const interval = setInterval(() => fetchData(), CACHE_TTL);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -73,13 +88,21 @@ export function ProviderCard({
             <p className="text-xs text-text-muted">{meta.description}</p>
           </div>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={loading}
-          className="p-2 rounded-lg hover:bg-surface-hover transition-colors text-text-muted"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          {cachedAt && !loading && (
+            <span className="text-[10px] text-text-muted" title="Last updated">
+              {formatAge(cachedAt)}
+            </span>
+          )}
+          <button
+            onClick={() => fetchData(true)}
+            disabled={loading}
+            className="p-2 rounded-lg hover:bg-surface-hover transition-colors text-text-muted"
+            title="Force refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -361,6 +384,13 @@ function ErrorState({ message }: { message: string }) {
       <p>{message}</p>
     </div>
   );
+}
+
+function formatAge(ts: number): string {
+  const diff = Math.floor((Date.now() - ts) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
 }
 
 function fmtNum(n: number): string {
